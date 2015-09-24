@@ -16,49 +16,68 @@
 			return [ z, Math.floor(x), Math.floor(y) ];
 		};
 
-		var dem = function(p) {
-			var lat = p.lat;
-			var lon = p.lon;
-			return new Promise(function(resolve, reject) {
-				var zxy14 = llz2zxy(lat, lon, 14);
-				var zxy22 = llz2zxy(lat, lon, 22);
-				var url = "http://cyberjapandata.gsi.go.jp/xyz/dem/" + zxy14.join("/") + ".txt";
-				var xhr = new XMLHttpRequest();
+		var demurl = function(p, zoom) {
+			var zxy = llz2zxy(p.lat, p.lon, Math.min(14, zoom));
+			return "http://cyberjapandata.gsi.go.jp/xyz/dem/" + zxy.join("/") + ".txt";
+		};
 
+		var loader = function(url) {
+			return new Promise(function(resolve, reject) {
+				var xhr = new XMLHttpRequest();
 				xhr.onreadystatechange = function() {
 					if (xhr.readyState != 4)
 						return;
-					var h = NaN;
-					try {
-						var x = zxy22[1] % 256;
-						var y = zxy22[2] % 256;
-						h = parseFloat(xhr.responseText.split("\n")[y].split(",")[x]);
-					} catch (e) {
-						h = NaN;
-					}
-					resolve(isNaN(h) ? -100 : h);
+					resolve({
+						url : url,
+						txt : xhr.responseText
+					});
 				};
 				xhr.open("get", url, true);
 				xhr.send();
 			});
 		};
 
-		window.elevation = function(json) {
+		window.elevation = function(json, zoom) {
 			if (json.encoded_polyline) {
 				alert("ToDo : support encoded polyline");
 				return;
 			}
 
-			var promises = [];
+			var db = {};
 			json.shape.forEach(function(p) {
-				promises.push(dem(p));
+				var url = demurl(p, zoom);
+				if (!db[url])
+					db[url] = true;
 			});
+
+			var promises = [];
+			for ( var url in db)
+				promises.push(loader(url));
 
 			return new Promise(function(resolve, reject) {
 				Promise.all(promises).then(function(data) {
+					data.forEach(function(v) {
+						db[v.url] = v.txt;
+					});
+
+					var height = [];
+					json.shape.forEach(function(p) {
+						var txt = db[demurl(p, zoom)];
+						if (!txt) {
+							height.push(-100);
+							return;
+						}
+
+						var zxy = llz2zxy(p.lat, p.lon, Math.min(14, zoom) + 8);
+						var x = zxy[1] % 256;
+						var y = zxy[2] % 256;
+						var h = parseFloat(txt.split("\n")[y].split(",")[x]);
+						height.push(isNaN(h) ? -100 : h);
+					});
+
 					resolve({
 						shape : json.shape,
-						height : data
+						height : height
 					});
 				});
 			});
@@ -98,7 +117,7 @@ body {
 		<canvas width="100%" height="100%" id="canvas"></canvas>
 	</div>
 	<script>
-		var factor = 10;
+		var factor = 1;
 
 		var canvas = document.getElementById("canvas");
 
@@ -143,7 +162,7 @@ body {
 
 			elevation({
 				shape : shape
-			}).then(handler);
+			}, map.getZoom()).then(handler);
 		};
 
 		var polyline = L.polyline([ [ 35.363856, 138.731232 ], [ 35.680725, 139.767208 ] ], {
