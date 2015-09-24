@@ -16,21 +16,19 @@
 			return [ z, Math.floor(x), Math.floor(y) ];
 		};
 
-		var demurl = function(p, zoom) {
+		var _url = function(p, zoom) {
 			var zxy = llz2zxy(p.lat, p.lon, Math.min(14, zoom));
 			return "http://cyberjapandata.gsi.go.jp/xyz/dem/" + zxy.join("/") + ".txt";
 		};
 
-		var loader = function(url) {
+		var _xhr = function(p, zoom) {
+			var url = _url(p, zoom);
 			return new Promise(function(resolve, reject) {
 				var xhr = new XMLHttpRequest();
 				xhr.onreadystatechange = function() {
 					if (xhr.readyState != 4)
 						return;
-					resolve({
-						url : url,
-						txt : xhr.responseText
-					});
+					resolve(xhr.responseText);
 				};
 				xhr.open("get", url, true);
 				xhr.send();
@@ -43,38 +41,30 @@
 				return;
 			}
 
-			var db = {};
-			json.shape.forEach(function(p) {
-				var url = demurl(p, zoom);
-				if (!db[url])
-					db[url] = true;
-			});
-
+			var cache = {};
 			var promises = [];
-			for ( var url in db)
-				promises.push(loader(url));
+			json.shape.forEach(function(p) {
+				var url = _url(p, zoom);
+				if (!cache[url])
+					cache[url] = _xhr(p, zoom);
+				promises.push(cache[url]);
+			});
 
 			return new Promise(function(resolve, reject) {
 				Promise.all(promises).then(function(data) {
-					data.forEach(function(v) {
-						db[v.url] = v.txt;
-					});
-
 					var height = [];
-					json.shape.forEach(function(p) {
-						var txt = db[demurl(p, zoom)];
+					json.shape.forEach(function(p, i) {
+						var txt = data[i];
 						if (!txt) {
 							height.push(-100);
 							return;
 						}
-
 						var zxy = llz2zxy(p.lat, p.lon, Math.min(14, zoom) + 8);
 						var x = zxy[1] % 256;
 						var y = zxy[2] % 256;
 						var h = parseFloat(txt.split("\n")[y].split(",")[x]);
 						height.push(isNaN(h) ? -100 : h);
 					});
-
 					resolve({
 						shape : json.shape,
 						height : height
@@ -143,6 +133,7 @@ body {
 			}
 			polyline.setLatLngs([ left, right ]);
 			handler();
+
 		};
 
 		var update = function() {
