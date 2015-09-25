@@ -6,6 +6,7 @@
 <meta name="viewport" content="initial-scale=1.0, maximum-scale=1.0" />
 <link rel="stylesheet" href="//cdn.leafletjs.com/leaflet-0.7.3/leaflet.css" />
 <script src="//cdn.leafletjs.com/leaflet-0.7.3/leaflet.js"></script>
+<script src="es6-promise.min.js"></script>
 <script>
 	(function(window) {
 
@@ -116,9 +117,109 @@ body {
 		<canvas width="100%" height="100%" id="canvas"></canvas>
 	</div>
 	<script>
-		var factor = 1;
+		var Slice = function(map, canvas) {
+			var n = map.getBounds().getNorth();
+			var e = map.getBounds().getEast();
+			var w = map.getBounds().getWest();
+			var s = map.getBounds().getSouth();
+			var p1 = [ s * 0.75 + n * 0.25, w * 0.75 + e * 0.25 ];
+			var p2 = [ s * 0.25 + n * 0.75, w * 0.25 + e * 0.75 ];
+			this.marker1 = L.marker(p1, {
+				draggable : true
+			}).on("drag", this.update, this).on("dragend", this.load, this).addTo(map);
+			this.marker2 = L.marker(p2, {
+				draggable : true
+			}).on("drag", this.update, this).on("dragend", this.load, this).addTo(map);
+			this.polyline = L.polyline([ p1, p2 ], {
+				color : "#f00",
+				opacity : 0.9,
+				lineCap : "round"
+			}).addTo(map);
+			this.map = map;
+			this.canvas = canvas;
+			return this;
+		};
 
-		var canvas = document.getElementById("canvas");
+		Slice.prototype = {
+			"load" : function() {
+				var p1 = this.marker1.getLatLng();
+				var p2 = this.marker2.getLatLng();
+				var q1 = this.map.latLngToContainerPoint(p1);
+				var q2 = this.map.latLngToContainerPoint(p2);
+
+				var d = 1 / Math.abs(q2.x - q1.x);
+				var shape = [];
+				for (var i = 0; i <= 1; i += d) {
+					shape.push({
+						"lat" : p1.lat * (1 - i) + p2.lat * i,
+						"lon" : p1.lng * (1 - i) + p2.lng * i
+					});
+				}
+				var that = this;
+				elevation({
+					shape : shape
+				}, this.map.getZoom()).then(function(data) {
+					that.draw(data);
+				});
+			},
+			"update" : function() {
+				var p1 = this.marker1.getLatLng();
+				var p2 = this.marker2.getLatLng();
+				var q1 = this.map.latLngToContainerPoint(p1);
+				var q2 = this.map.latLngToContainerPoint(p2);
+
+				this.polyline.setLatLngs([ p1, p2 ]);
+				this.draw();
+			},
+			"draw" : function(json) {
+
+				var p1 = this.marker1.getLatLng();
+				var p2 = this.marker2.getLatLng();
+				var q1 = this.map.latLngToContainerPoint(p1);
+				var q2 = this.map.latLngToContainerPoint(p2);
+
+				var w = this.canvas.width;
+				var h = this.canvas.height;
+				var c = this.canvas.getContext('2d');
+
+				c.clearRect(0, 0, w, h);
+
+				c.beginPath();
+				c.lineCap = "round";
+				c.strokeStyle = "#888";
+				c.lineWidth = 1.0;
+				for (var i = 0; i < 4000; i += 500) {
+					var y = h * (1 - i / 4000);
+					c.moveTo(0, y);
+					c.lineTo(w, y);
+				}
+				c.moveTo(q1.x, 0);
+				c.lineTo(q1.x, h);
+				c.moveTo(q2.x, 0);
+				c.lineTo(q2.x, h);
+				c.stroke();
+
+				if (!json)
+					return;
+
+				c.beginPath();
+				c.strokeStyle = "#f00";
+				c.lineWidth = 3.0;
+
+				json.height.forEach(function(v, i) {
+					var p = [ json.shape[i].lat, json.shape[i].lon ];
+					var q = this.map.latLngToContainerPoint(p);
+					var x = q.x;
+					var y = h * (1 - v / 4000);
+					if (i == 0)
+						c.moveTo(x, y);
+					else
+						c.lineTo(x, y);
+				}, this);
+				c.stroke();
+
+			}
+		};
 
 		var map = L.map("map", {
 			zoom : 10,
@@ -132,97 +233,14 @@ body {
 
 		map.attributionControl.addAttribution("<a href='http://maps.gsi.go.jp/development/'>10mメッシュ標高データ (国土地理院)</a>");
 
-		var onDrag = function() {
-			var left = markers[0].getLatLng();
-			var right = markers[1].getLatLng();
-			if (left.lng > right.lng) {
-				var a = left;
-				left = right;
-				right = a;
-			}
-			polyline.setLatLngs([ left, right ]);
-			handler();
+		var canvas = document.getElementById("canvas");
+		var slice = new Slice(map, canvas);
 
-		};
-
-		var update = function() {
-			var left = polyline.getLatLngs()[0];
-			var right = polyline.getLatLngs()[1];
-			var p = map.latLngToContainerPoint(left);
-			var q = map.latLngToContainerPoint(right);
-			var dx = q.x - p.x;
-
-			var shape = [];
-			for (var x = 0; x <= dx; x += factor) {
-				shape.push({
-					"lat" : left.lat * (1 - x / dx) + right.lat * x / dx,
-					"lon" : left.lng * (1 - x / dx) + right.lng * x / dx
-				});
-			}
-
-			elevation({
-				shape : shape
-			}, map.getZoom()).then(handler);
-		};
-
-		var polyline = L.polyline([ [ 35.363856, 138.731232 ], [ 35.680725, 139.767208 ] ], {
-			color : "#f00",
-			opacity : 0.9,
-			lineCap : "round"
-		}).addTo(map);
-
-		var markers = [];
-		polyline.getLatLngs().forEach(function(p) {
-			markers.push(L.marker(p, {
-				draggable : true
-			}).on("dragend", update).on("drag", onDrag).addTo(map));
-		});
-
-		var handler = function(json) {
-
-			var p = map.latLngToContainerPoint(polyline.getLatLngs()[0]);
-			var q = map.latLngToContainerPoint(polyline.getLatLngs()[1]);
-
-			var width = window.innerWidth;
-			var height = 200;
-			canvas.setAttribute("width", width);
-			canvas.setAttribute("height", height);
-			var ctx = canvas.getContext('2d');
-
-			ctx.beginPath();
-			ctx.lineCap = "round";
-			ctx.strokeStyle = "#888";
-			ctx.lineWidth = 1.0;
-			for (var i = 0; i < 4000; i += 500) {
-				var y = height * (1 - i / 4000);
-				ctx.moveTo(0, y);
-				ctx.lineTo(width, y);
-			}
-			ctx.moveTo(p.x, 0);
-			ctx.lineTo(p.x, height);
-			ctx.moveTo(q.x, 0);
-			ctx.lineTo(q.x, height);
-			ctx.stroke();
-
-			ctx.beginPath();
-			ctx.strokeStyle = "#f00";
-			ctx.lineWidth = 3.0;
-
-			if (!json)
-				return;
-
-			json.height.forEach(function(h, i) {
-				var x = p.x + i * (q.x - p.x) / (json.height.length - 1);
-				var y = height * (1 - h / 4000);
-				if (i == 0)
-					ctx.moveTo(x, y);
-				else
-					ctx.lineTo(x, y);
-			});
-			ctx.stroke();
-		};
-
-		update();
+		map.on("resize viewreset moveend", function() {
+			canvas.width = window.innerWidth;
+			canvas.height = 200;
+			slice.load();
+		}).fire("resize");
 	</script>
 </body>
 </html>
