@@ -8,31 +8,45 @@
 <script src="//cdn.leafletjs.com/leaflet-0.7.3/leaflet.js"></script>
 <script>
 	(function(window) {
-		var llz2zxy = function(lat, lon, z) {
-			var r = lat * Math.PI / 180
-			var n = Math.pow(2, z);
-			var x = n * ((lon + 180) / 360);
-			var y = n * (1 - (Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI)) / 2;
-			return [ z, Math.floor(x), Math.floor(y) ];
-		};
 
-		var _url = function(p, zoom) {
-			var zxy = llz2zxy(p.lat, p.lon, Math.min(14, zoom));
-			return "http://cyberjapandata.gsi.go.jp/xyz/dem/" + zxy.join("/") + ".txt";
-		};
-
-		var _xhr = function(p, zoom) {
-			var url = _url(p, zoom);
+		var load = function(url, dems) {
 			return new Promise(function(resolve, reject) {
 				var xhr = new XMLHttpRequest();
 				xhr.onreadystatechange = function() {
 					if (xhr.readyState != 4)
 						return;
+					dems.forEach(function(dem) {
+						dem.execute(xhr.responseText);
+					});
 					resolve(xhr.responseText);
 				};
 				xhr.open("get", url, true);
 				xhr.send();
 			});
+		};
+
+		var DEM = function(lat, lon, z) {
+			var r = lat * Math.PI / 180
+			var n = Math.pow(2, z);
+			var x = Math.floor(n * ((lon + 180) / 360));
+			var y = Math.floor(n * (1 - (Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI)) / 2);
+			this.lat = lat;
+			this.lon = lon;
+			this.x = x;
+			this.y = y;
+			this.z = z;
+			this.h = NaN;
+			this.src = "http://cyberjapandata.gsi.go.jp/xyz/dem/" + [ z, x, y ].join("/") + ".txt";
+			return this;
+		};
+
+		DEM.prototype.execute = function(txt) {
+			if (txt) {
+				var dem = new DEM(this.lat, this.lon, this.z + 8);
+				var x = dem.x % 256;
+				var y = dem.y % 256;
+				this.h = parseFloat(txt.split("\n")[y].split(",")[x]);
+			}
 		};
 
 		window.elevation = function(json, zoom) {
@@ -41,29 +55,24 @@
 				return;
 			}
 
-			var cache = {};
-			var promises = [];
+			var dems = [];
+			var tree = {};
 			json.shape.forEach(function(p) {
-				var url = _url(p, zoom);
-				if (!cache[url])
-					cache[url] = _xhr(p, zoom);
-				promises.push(cache[url]);
+				var dem = new DEM(p.lat, p.lon, Math.min(14, zoom));
+				dems.push(dem);
+				if (!tree[dem.src])
+					tree[dem.src] = [];
+				tree[dem.src].push(dem);
 			});
+			var promises = [];
+			for ( var key in tree)
+				promises.push(load(key, tree[key]));
 
 			return new Promise(function(resolve, reject) {
-				Promise.all(promises).then(function(data) {
+				Promise.all(promises).then(function() {
 					var height = [];
-					json.shape.forEach(function(p, i) {
-						var txt = data[i];
-						if (!txt) {
-							height.push(-100);
-							return;
-						}
-						var zxy = llz2zxy(p.lat, p.lon, Math.min(14, zoom) + 8);
-						var x = zxy[1] % 256;
-						var y = zxy[2] % 256;
-						var h = parseFloat(txt.split("\n")[y].split(",")[x]);
-						height.push(isNaN(h) ? -100 : h);
+					dems.forEach(function(dem) {
+						height.push(dem.h);
 					});
 					resolve({
 						shape : json.shape,
